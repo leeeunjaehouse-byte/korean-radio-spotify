@@ -27,7 +27,7 @@ api_bp = Blueprint('api', __name__)
 def follow_program():
     """Follow a program"""
     user_id = session.get('user_id')
-    data = request.get_json()
+    data = request.get_json(silent=True)
 
     if not data or 'program_code' not in data:
         return jsonify({'error': 'program_code is required'}), 400
@@ -59,7 +59,7 @@ def follow_program():
 def unfollow_program():
     """Unfollow a program"""
     user_id = session.get('user_id')
-    data = request.get_json()
+    data = request.get_json(silent=True)
 
     if not data or 'program_code' not in data:
         return jsonify({'error': 'program_code is required'}), 400
@@ -151,7 +151,7 @@ def get_playlists():
 def create_playlist_now():
     """Manually trigger playlist creation for today"""
     user_id = session.get('user_id')
-    data = request.get_json() or {}
+    data = request.get_json(silent=True) or {}
     program_code = data.get('program_code')
 
     try:
