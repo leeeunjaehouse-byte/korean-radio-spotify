@@ -8,6 +8,7 @@ from flask import Blueprint, redirect, url_for, session, request, current_app
 from functools import wraps
 import spotipy
 from spotipy.oauth2 import SpotifyOAuth
+from spotipy.cache_handler import MemoryCacheHandler
 from app.models import db, User
 import logging
 
@@ -19,12 +20,19 @@ SPOTIFY_SCOPES = 'playlist-modify-public playlist-modify-private user-read-email
 
 
 def get_spotify_oauth():
-    """Create and return a SpotifyOAuth instance"""
+    """Create and return a SpotifyOAuth instance.
+
+    Uses MemoryCacheHandler to prevent token caching to disk.
+    Without this, spotipy defaults to a shared .cache file,
+    which causes all users to share the first user's tokens.
+    """
     return SpotifyOAuth(
         client_id=current_app.config.get('SPOTIFY_CLIENT_ID'),
         client_secret=current_app.config.get('SPOTIFY_CLIENT_SECRET'),
         redirect_uri=current_app.config.get('SPOTIFY_REDIRECT_URI'),
-        scope=SPOTIFY_SCOPES
+        scope=SPOTIFY_SCOPES,
+        open_browser=False,
+        cache_handler=MemoryCacheHandler(),
     )
 
 

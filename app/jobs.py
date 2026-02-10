@@ -314,6 +314,7 @@ def _fetch_or_cache_songs(program, target_date):
 def _get_user_spotify_client(user):
     """
     Create an authenticated Spotify client for a user.
+    Handles token refresh if the token is expired.
 
     Args:
         user (User): User object with encrypted tokens
@@ -325,10 +326,29 @@ def _get_user_spotify_client(user):
         ValueError: If user has no access token
         Exception: If token refresh fails
     """
+    from app.blueprints.auth import get_spotify_oauth
+
+    # Check if token is expired and refresh if needed
+    if user.token_expires_at and user.token_expires_at < datetime.utcnow():
+        refresh_token = user.get_refresh_token()
+        if refresh_token:
+            try:
+                sp_oauth = get_spotify_oauth()
+                new_token = sp_oauth.refresh_access_token(refresh_token)
+                user.set_access_token(new_token['access_token'])
+                if 'refresh_token' in new_token:
+                    user.set_refresh_token(new_token['refresh_token'])
+                user.token_expires_at = datetime.fromtimestamp(new_token['expires_at'])
+                db.session.commit()
+                log.info(f"Refreshed token for user {user.id}")
+                return spotipy.Spotify(auth=new_token['access_token'])
+            except Exception as e:
+                log.error(f"Token refresh failed for user {user.id}: {e}")
+                raise ValueError(f'Token refresh failed: {e}')
+
     access_token = user.get_access_token()
 
     if not access_token:
         raise ValueError(f'User {user.id} has no Spotify access token')
 
-    # Try to use token directly
     return spotipy.Spotify(auth=access_token)
