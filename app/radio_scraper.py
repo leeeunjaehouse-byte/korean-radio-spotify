@@ -218,7 +218,8 @@ def _parse_kbs_board_songs(lines):
     num_re = re.compile(r"^(\d+)\.\s*(.+)")
     inst_re = re.compile(
         r"(pf|vn|vc|gt|bar|sop|ten|bass|fl|ob|cl|hrn|perc|org|hp|"
-        r"voc|baroque harp|viola da gamba|nyckelharpa|accordion):\s*",
+        r"voc|trombone|trumpet|tuba|cello|violin|piano|soprano|"
+        r"baroque harp|viola da gamba|nyckelharpa|accordion):\s*",
         re.IGNORECASE,
     )
     skip_words = ["뮤직 인사이드", "세상의 모든 음악 Logo", "저녁에 쉼표"]
@@ -265,9 +266,17 @@ def _parse_kbs_board_songs(lines):
         # Case 2: Separated format - next line is artist
         if i + 1 < len(lines):
             nxt = lines[i + 1]
-            if not num_re.match(nxt) and not any(h in nxt for h in skip_words):
+
+            # Skip "+" continuation lines (multi-song entries)
+            j = i + 1
+            while j < len(lines) and lines[j].strip().startswith("+"):
+                j += 1
+            if j > i + 1:
+                nxt = lines[j] if j < len(lines) else ""
+
+            if nxt and not num_re.match(nxt) and not any(h in nxt for h in skip_words):
                 if dur_re.fullmatch(nxt):
-                    i += 2
+                    i = j + 1
                 else:
                     inst_m = inst_re.match(nxt)
                     if inst_m:
@@ -276,12 +285,12 @@ def _parse_kbs_board_songs(lines):
                         artist = nxt.strip()
                     artist = re.split(r",\s*지휘:", artist)[0].strip().rstrip(",")
 
-                    if i + 2 < len(lines) and dur_re.fullmatch(lines[i + 2].strip()):
-                        i += 3
+                    if j + 1 < len(lines) and dur_re.fullmatch(lines[j + 1].strip()):
+                        i = j + 2
                     else:
-                        i += 2
+                        i = j + 1
             else:
-                i += 1
+                i = j if j > i + 1 else i + 1
         else:
             i += 1
 

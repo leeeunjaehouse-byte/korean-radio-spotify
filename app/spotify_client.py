@@ -28,12 +28,16 @@ DAY_NAMES = ["월", "화", "수", "목", "금", "토", "일"]
 
 def clean_artist_name(artist):
     """
-    Clean artist name by removing parenthetical info and featured artists.
+    Clean artist name by removing parenthetical info, featured artists,
+    and instrument prefixes.
 
     Removes:
+    - Instrument prefixes: "trombone: Christian Lindberg" -> "Christian Lindberg"
     - Content in parentheses: "Artist (Remix)" -> "Artist"
     - Featured artists: "Artist feat. Other" -> "Artist"
     - "of" separator: "Artist of Something" -> "Artist"
+    - Secondary performer after comma with instrument:
+      "Christian Lindberg, pf: Per Lundberg" -> "Christian Lindberg"
 
     Args:
         artist (str): Artist name to clean
@@ -41,19 +45,92 @@ def clean_artist_name(artist):
     Returns:
         str: Cleaned artist name
     """
+    # Remove instrument/role prefix at start
+    artist = re.sub(
+        r"^(pf|vn|vc|gt|bar|sop|ten|bass|fl|ob|cl|hrn|perc|org|hp|voc|"
+        r"trombone|trumpet|tuba|cello|violin|piano|soprano|"
+        r"baroque harp|viola da gamba|nyckelharpa|accordion|"
+        r"지휘|pf&지휘):\s*",
+        "",
+        artist,
+        flags=re.IGNORECASE,
+    )
+    # Remove secondary performers with instrument prefix after comma
+    artist = re.split(r",\s*(?:pf|vn|vc|trombone|piano|gt):", artist)[0].strip()
     artist = re.sub(r"\s*\([^)]*\)\s*", " ", artist)
     artist = re.split(r"\s+feat\.?\s+", artist, flags=re.IGNORECASE)[0]
     artist = re.split(r"\s+of\s+", artist, flags=re.IGNORECASE)[0]
     return artist.strip()
 
 
+def clean_title(title):
+    """
+    Clean song title for better Spotify search results.
+
+    Handles patterns common in Korean radio playlists:
+    - Request codes: "[5080/신청곡] Va Pensiero" -> "Va Pensiero"
+    - Korean parenthetical translations: "Erindring (회상)" -> "Erindring"
+    - Composer prefixes with Korean titles:
+      "Kreisler / 비엔나풍의 작은 행진곡 (Marche Miniature Viennoise)"
+      -> title="Marche Miniature Viennoise", composer="Kreisler"
+    - Multi-song markers: "Song A + Song B" -> "Song A"
+
+    Args:
+        title (str): Raw song title from scraper
+
+    Returns:
+        tuple: (cleaned_title, composer_or_none)
+    """
+    # 1. Remove request code prefixes: [5080/신청곡], [권진희/신청곡], etc.
+    title = re.sub(r"\[[^\]]*(?:신청곡|사연)[^\]]*\]\s*", "", title)
+
+    # 2. Remove "+" continuation (multi-song entries)
+    title = re.split(r"\s*\+\s+", title)[0].strip()
+
+    # 3. Handle "Composer / Title" format (e.g., "Kreisler / 비엔나풍의 작은 행진곡")
+    composer = None
+    composer_match = re.match(r"^([A-Za-z][A-Za-z.\s]+?)\s*/\s+(.+)$", title)
+    if composer_match:
+        composer = composer_match.group(1).strip()
+        title = composer_match.group(2).strip()
+
+    # 4. Handle title with Korean + Western in parentheses
+    #    e.g., "비엔나풍의 작은 행진곡 (Marche Miniature Viennoise)"
+    #    -> prefer "Marche Miniature Viennoise"
+    has_korean = bool(re.search(r"[가-힣]", title))
+    if has_korean:
+        western_match = re.search(
+            r"\(([A-Za-z][A-Za-z\s',\-\.&:]+)\)", title
+        )
+        if western_match:
+            title = western_match.group(1).strip()
+            has_korean = False
+
+    # 5. Remove Korean-only parenthetical translations
+    #    e.g., "(연애 소설의 결말)", "(회상)", "(보링까노의 애가)"
+    title = re.sub(r"\([가-힣\s,·]+\)", "", title)
+
+    # 6. Also remove Chinese-only parenthetical translations
+    #    but keep mixed ones like "(在春天消失之前)" which are actual titles
+    # Not removing Chinese since some song titles are in Chinese
+
+    # 7. Clean up extra whitespace
+    title = re.sub(r"\s+", " ", title).strip()
+
+    return title, composer
+
+
 def search_spotify_track(sp, title, artist):
     """
     Search for a track on Spotify using a 3-tier strategy.
 
-    Tier 1: Search with title and cleaned artist name
-    Tier 2: General search with both title and artist
+    Before searching, cleans the title to remove Korean radio noise
+    (request codes, Korean translations, composer prefixes).
+
+    Tier 1: Search with cleaned title and artist
+    Tier 2: General search with cleaned title and artist
     Tier 3: Title-only search (fallback)
+    Tier 4: If composer found, search with composer + title
 
     Args:
         sp (spotipy.Spotify): Authenticated Spotify client
@@ -63,40 +140,58 @@ def search_spotify_track(sp, title, artist):
     Returns:
         str: Spotify track ID if found, None otherwise
     """
+    cleaned_title, composer = clean_title(title)
     cleaned_artist = clean_artist_name(artist) if artist else ""
 
-    # Tier 1: Specific query with title and artist
+    log.debug(
+        f"Searching: original='{title}' -> cleaned='{cleaned_title}', "
+        f"artist='{artist}' -> '{cleaned_artist}', composer='{composer}'"
+    )
+
+    # Tier 1: Specific query with cleaned title and artist
     if cleaned_artist:
-        query = f"track:{title} artist:{cleaned_artist}"
+        query = f"track:{cleaned_title} artist:{cleaned_artist}"
         try:
             results = sp.search(q=query, type="track", limit=3)
             tracks = results.get("tracks", {}).get("items", [])
             if tracks:
-                log.debug(f"Found '{title}' by '{cleaned_artist}' (Tier 1)")
+                log.debug(f"Found '{cleaned_title}' by '{cleaned_artist}' (Tier 1)")
                 return tracks[0]["id"]
         except Exception as e:
             log.debug(f"Tier 1 search failed: {e}")
 
         # Tier 2: General search with both title and artist
-        query = f"{title} {cleaned_artist}"
+        query = f"{cleaned_title} {cleaned_artist}"
         try:
             results = sp.search(q=query, type="track", limit=3)
             tracks = results.get("tracks", {}).get("items", [])
             if tracks:
-                log.debug(f"Found '{title}' by '{cleaned_artist}' (Tier 2)")
+                log.debug(f"Found '{cleaned_title}' by '{cleaned_artist}' (Tier 2)")
                 return tracks[0]["id"]
         except Exception as e:
             log.debug(f"Tier 2 search failed: {e}")
 
-    # Tier 3: Title-only search (fallback)
+    # Tier 3: If composer was extracted, search with composer as artist
+    if composer:
+        query = f"{cleaned_title} {composer}"
+        try:
+            results = sp.search(q=query, type="track", limit=3)
+            tracks = results.get("tracks", {}).get("items", [])
+            if tracks:
+                log.debug(f"Found '{cleaned_title}' with composer '{composer}' (Tier 3)")
+                return tracks[0]["id"]
+        except Exception as e:
+            log.debug(f"Tier 3 composer search failed: {e}")
+
+    # Tier 4: Title-only search (fallback)
     try:
-        results = sp.search(q=title, type="track", limit=5)
+        results = sp.search(q=cleaned_title, type="track", limit=5)
         tracks = results.get("tracks", {}).get("items", [])
         if tracks:
-            log.debug(f"Found '{title}' by title-only search (Tier 3)")
+            log.debug(f"Found '{cleaned_title}' by title-only search (Tier 4)")
             return tracks[0]["id"]
     except Exception as e:
-        log.debug(f"Tier 3 search failed: {e}")
+        log.debug(f"Tier 4 search failed: {e}")
 
     log.debug(f"Could not find '{title}' by '{artist}' on Spotify")
     return None
