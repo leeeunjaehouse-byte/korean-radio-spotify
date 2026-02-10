@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+
+{% block title %}라디오 플리 - 한국 라디오를 Spotify 플레이리스트로{% endblock %}
+
+{% block content %}
+<!-- Hero Section -->
+<section class="hero">
+    <div class="hero-content">
+        <h1 class="hero-title">한국 라디오 선곡표를<br>Spotify 플레이리스트로</h1>
+        <p class="hero-subtitle">매일 자동으로 생성됩니다</p>
+        {% if not session.get('user_id') %}
+            <a href="/auth/spotify" class="btn btn-primary btn-large">Spotify로 시작하기</a>
+        {% else %}
+            <a href="/dashboard" class="btn btn-primary btn-large">대시보드로 이동</a>
+        {% endif %}
+    </div>
+</section>
+
+<!-- Feature Cards Section -->
+<section class="features">
+    <h2 class="section-title">라디오 플리의 특징</h2>
+    <div class="features-grid">
+        <div class="feature-card">
+            <div class="feature-icon">📻</div>
+            <h3>4개 라디오 프로그램</h3>
+            <p>MBC FM4U, KBS Cool FM, KBS Classic FM의 인기 음악 프로그램 선곡표를 자동으로 수집합니다.</p>
+        </div>
+        <div class="feature-card">
+            <div class="feature-icon">⚙️</div>
+            <h3>매일 자동 생성</h3>
+            <p>매일 밤 9시, 구독 중인 프로그램의 플레이리스트가 자동으로 생성됩니다.</p>
+        </div>
+        <div class="feature-card">
+            <div class="feature-icon">🎵</div>
+            <h3>Spotify 연동</h3>
+            <p>생성된 플레이리스트를 바로 Spotify에서 들을 수 있습니다.</p>
+        </div>
+    </div>
+</section>
+
+<!-- How It Works Section -->
+<section class="how-it-works">
+    <h2 class="section-title">시작하는 방법</h2>
+    <div class="steps-container">
+        <div class="step">
+            <div class="step-number">1</div>
+            <h3>Spotify 로그인</h3>
+            <p>Spotify 계정으로 로그인하세요.</p>
+        </div>
+        <div class="step">
+            <div class="step-number">2</div>
+            <h3>프로그램 구독</h3>
+            <p>원하는 라디오 프로그램을 선택합니다.</p>
+        </div>
+        <div class="step">
+            <div class="step-number">3</div>
+            <h3>자동 플레이리스트</h3>
+            <p>매일 밤 새로운 플레이리스트가 Spotify에 추가됩니다.</p>
+        </div>
+    </div>
+</section>
+
+<!-- Supported Programs Section -->
+<section class="supported-programs">
+    <h2 class="section-title">지원하는 라디오 프로그램</h2>
+    <div class="programs-list">
+        <div class="program-item">
+            <span class="program-name">🎙️ 이상순의 음악도시</span>
+            <span class="program-channel">MBC FM4U</span>
+        </div>
+        <div class="program-item">
+            <span class="program-name">🎙️ 배철수의 음악캠프 (윤상)</span>
+            <span class="program-channel">MBC FM4U</span>
+        </div>
+        <div class="program-item">
+            <span class="program-name">🎙️ 이현우의 음악앨범</span>
+            <span class="program-channel">KBS Cool FM</span>
+        </div>
+        <div class="program-item">
+            <span class="program-name">🎙️ 세상의 모든 음악 (전기현)</span>
+            <span class="program-channel">KBS Classic FM</span>
+        </div>
+    </div>
+</section>
+
+<!-- CTA Section -->
+<section class="cta-section">
+    <h2>지금 시작하세요</h2>
+    <p>좋아하는 라디오 프로그램의 모든 곡을 Spotify에서 관리하세요</p>
+    {% if not session.get('user_id') %}
+        <a href="/auth/spotify" class="btn btn-primary btn-large">지금 가입하기</a>
+    {% else %}
+        <a href="/dashboard" class="btn btn-primary btn-large">대시보드 열기</a>
+    {% endif %}
+</section>
+{% endblock %}

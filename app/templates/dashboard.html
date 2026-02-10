@@ -1,0 +1,199 @@
+{% extends "base.html" %}
+
+{% block title %}대시보드 - 라디오 플리{% endblock %}
+
+{% block content %}
+<!-- Welcome Section -->
+<section class="welcome-section">
+    <div class="welcome-content">
+        <h1 class="welcome-title">안녕하세요, <span class="username">{{ user.display_name }}</span>님!</h1>
+        <p class="welcome-subtitle">Spotify 계정이 연결되었습니다</p>
+    </div>
+</section>
+
+<!-- Program Selection Section -->
+<section class="programs-section">
+    <h2 class="section-title">프로그램 선택</h2>
+    <p class="section-description">구독할 라디오 프로그램을 선택하세요. 선택한 프로그램의 새로운 곡이 자동으로 플레이리스트에 추가됩니다.</p>
+
+    <div class="programs-grid" id="programs-grid">
+        <div class="loading-spinner">로드 중...</div>
+    </div>
+</section>
+
+<!-- Create Playlist Now Section -->
+<section class="create-playlist-section">
+    <h2 class="section-title">오늘 플레이리스트 생성</h2>
+    <p class="section-description">구독 중인 프로그램의 최신 곡으로 새로운 플레이리스트를 바로 만들 수 있습니다.</p>
+
+    <div class="create-playlist-container">
+        <button class="btn btn-primary" id="create-now-btn" onclick="createNow()">
+            <span class="btn-text">지금 생성하기</span>
+            <span class="btn-spinner" style="display: none;">⏳ 생성 중...</span>
+        </button>
+        <div id="create-results" style="display: none; margin-top: 16px;"></div>
+    </div>
+</section>
+
+<!-- Recent Playlists Section -->
+<section class="playlists-section">
+    <h2 class="section-title">최근 플레이리스트</h2>
+    <p class="section-description">생성된 플레이리스트 목록입니다.</p>
+
+    <div class="playlists-container" id="playlists-container">
+        <div class="loading-spinner">로드 중...</div>
+    </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    // Initialize
+    document.addEventListener('DOMContentLoaded', () => {
+        loadPrograms();
+        loadPlaylists();
+    });
+
+    // Load programs from API (uses actual prog_codes)
+    async function loadPrograms() {
+        try {
+            const programs = await fetchAPI('/api/programs/status');
+            const container = document.getElementById('programs-grid');
+
+            if (!programs || programs.length === 0) {
+                container.innerHTML = '<p class="empty-message">사용 가능한 프로그램이 없습니다.</p>';
+                return;
+            }
+
+            container.innerHTML = programs.map(p => `
+                <div class="program-card ${p.is_followed ? 'followed' : ''}" id="card-${p.prog_code}">
+                    <div class="program-header">
+                        <h3 class="program-title">${p.name}</h3>
+                        <span class="program-dj">${p.description || ''}</span>
+                    </div>
+                    <div class="program-info">
+                        <span class="program-channel">📻 ${p.station}</span>
+                    </div>
+                    <button
+                        class="btn btn-toggle"
+                        id="btn-${p.prog_code}"
+                        onclick="toggleFollow('${p.prog_code}')"
+                        data-followed="${p.is_followed}"
+                    >
+                        ${p.is_followed ? '구독 중 ✓' : '구독하기'}
+                    </button>
+                </div>
+            `).join('');
+        } catch (error) {
+            document.getElementById('programs-grid').innerHTML = '<p class="error-message">프로그램을 로드할 수 없습니다.</p>';
+        }
+    }
+
+    // Toggle follow
+    async function toggleFollow(programCode) {
+        const btn = document.getElementById(`btn-${programCode}`);
+        const isFollowed = btn.dataset.followed === 'true';
+        const endpoint = isFollowed ? 'unfollow' : 'follow';
+
+        btn.disabled = true;
+        btn.textContent = '처리 중...';
+
+        try {
+            await fetchAPI(`/api/programs/${endpoint}`, {
+                method: 'POST',
+                body: JSON.stringify({ program_code: programCode })
+            });
+
+            btn.dataset.followed = String(!isFollowed);
+            btn.textContent = isFollowed ? '구독하기' : '구독 중 ✓';
+
+            const card = document.getElementById(`card-${programCode}`);
+            if (isFollowed) {
+                card.classList.remove('followed');
+            } else {
+                card.classList.add('followed');
+            }
+
+            showToast(isFollowed ? '구독이 취소되었습니다.' : '프로그램을 구독했습니다.', 'success');
+        } catch (error) {
+            btn.textContent = isFollowed ? '구독 중 ✓' : '구독하기';
+        } finally {
+            btn.disabled = false;
+        }
+    }
+
+    // Create playlist now
+    async function createNow() {
+        const btn = document.getElementById('create-now-btn');
+        const btnText = btn.querySelector('.btn-text');
+        const btnSpinner = btn.querySelector('.btn-spinner');
+        const resultsDiv = document.getElementById('create-results');
+
+        btn.disabled = true;
+        btnText.style.display = 'none';
+        btnSpinner.style.display = 'inline';
+        resultsDiv.style.display = 'none';
+
+        try {
+            const response = await fetchAPI('/api/playlists/create-now', { method: 'POST' });
+
+            if (response.results && response.results.length > 0) {
+                resultsDiv.innerHTML = response.results.map(r => `
+                    <div class="result-item" style="padding: 12px; margin-bottom: 8px; border-radius: 8px; background: ${r.success ? '#1DB95420' : '#e74c3c20'};">
+                        <strong>${r.program_name || r.program_code}</strong>:
+                        ${r.success
+                            ? `✓ ${r.songs_added}/${r.total_songs}곡 추가 <a href="${r.playlist_url}" target="_blank" style="color: #1DB954;">[Spotify에서 열기]</a>`
+                            : `✕ ${r.error}`
+                        }
+                    </div>
+                `).join('');
+                resultsDiv.style.display = 'block';
+                showToast('플레이리스트 생성 완료!', 'success');
+                setTimeout(loadPlaylists, 1000);
+            } else {
+                showToast('구독 중인 프로그램이 없습니다.', 'error');
+            }
+        } catch (error) {
+            // Error already shown via fetchAPI
+        } finally {
+            btn.disabled = false;
+            btnText.style.display = 'inline';
+            btnSpinner.style.display = 'none';
+        }
+    }
+
+    // Load playlists
+    async function loadPlaylists() {
+        try {
+            const playlists = await fetchAPI('/api/playlists');
+            const container = document.getElementById('playlists-container');
+
+            if (!playlists || playlists.length === 0) {
+                container.innerHTML = '<p class="empty-message">아직 생성된 플레이리스트가 없습니다. 프로그램을 구독하고 "지금 생성하기"를 눌러보세요!</p>';
+                return;
+            }
+
+            container.innerHTML = playlists.map(pl => `
+                <div class="playlist-item">
+                    <div class="playlist-left">
+                        <div class="playlist-info">
+                            <h4 class="playlist-name">${pl.playlist_name}</h4>
+                            <p class="playlist-date">${formatDateKorean(pl.created_date)}</p>
+                            <p class="playlist-program">${pl.program_name} · ${pl.program_station}</p>
+                        </div>
+                    </div>
+                    <div class="playlist-right">
+                        <span class="playlist-count">${pl.songs_added}/${pl.total_songs}곡</span>
+                        ${pl.spotify_playlist_url
+                            ? `<a href="${pl.spotify_playlist_url}" target="_blank" class="btn btn-secondary btn-small">Spotify에서 열기</a>`
+                            : ''
+                        }
+                    </div>
+                </div>
+            `).join('');
+        } catch (error) {
+            document.getElementById('playlists-container').innerHTML = '<p class="error-message">플레이리스트를 로드할 수 없습니다.</p>';
+        }
+    }
+</script>
+{% endblock %}

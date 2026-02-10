@@ -1,0 +1,195 @@
+{% extends "base.html" %}
+
+{% block title %}관리자 대시보드 - 라디오 플리{% endblock %}
+
+{% block content %}
+<!-- Admin Header -->
+<section class="admin-header">
+    <h1 class="admin-title">관리자 대시보드</h1>
+    <p class="admin-subtitle">시스템 상태 및 통계</p>
+</section>
+
+<!-- Stats Cards -->
+<section class="stats-section">
+    <div class="stats-grid">
+        <div class="stat-card">
+            <div class="stat-icon">👥</div>
+            <div class="stat-content">
+                <h3 class="stat-label">활성 사용자</h3>
+                <p class="stat-value" id="total-users">-</p>
+            </div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-icon">📊</div>
+            <div class="stat-content">
+                <h3 class="stat-label">총 플레이리스트</h3>
+                <p class="stat-value" id="total-playlists">-</p>
+            </div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-icon">🎵</div>
+            <div class="stat-content">
+                <h3 class="stat-label">총 곡 추가</h3>
+                <p class="stat-value" id="total-songs">-</p>
+            </div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-icon">📅</div>
+            <div class="stat-content">
+                <h3 class="stat-label">마지막 실행</h3>
+                <p class="stat-value" id="last-run">-</p>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- Cache Status Section -->
+<section class="cache-section">
+    <h2 class="section-title">캐시 상태</h2>
+    <p class="section-description">각 프로그램의 오늘 선곡표 캐시입니다.</p>
+    <div class="cache-grid" id="cache-grid">
+        <div class="loading-spinner">로드 중...</div>
+    </div>
+</section>
+
+<!-- Manual Jobs Section -->
+<section class="jobs-section">
+    <h2 class="section-title">수동 작업</h2>
+    <div class="jobs-grid">
+        <div class="job-card">
+            <h3>선곡표 수집</h3>
+            <p>모든 프로그램의 최신 선곡표를 수집합니다.</p>
+            <button class="btn btn-secondary" id="btn-collect" onclick="runJob('/api/admin/run-collect-songs', 'btn-collect')">실행</button>
+        </div>
+        <div class="job-card">
+            <h3>플레이리스트 생성</h3>
+            <p>모든 사용자의 플레이리스트를 즉시 생성합니다.</p>
+            <button class="btn btn-secondary" id="btn-create" onclick="runJob('/api/admin/run-create-playlists', 'btn-create')">실행</button>
+        </div>
+        <div class="job-card">
+            <h3>캐시 초기화</h3>
+            <p>모든 캐시를 삭제합니다.</p>
+            <button class="btn btn-danger" id="btn-clear" onclick="if(confirm('정말 캐시를 초기화하시겠습니까?')) runJob('/api/admin/clear-cache', 'btn-clear')">초기화</button>
+        </div>
+    </div>
+</section>
+
+<!-- Program Details Section -->
+<section class="program-details-section">
+    <h2 class="section-title">프로그램별 통계</h2>
+    <div class="program-details-grid" id="program-details-grid">
+        <div class="loading-spinner">로드 중...</div>
+    </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    // Server-side programs data (passed via Jinja2)
+    const PROGRAMS = {{ programs_json|safe }};
+
+    document.addEventListener('DOMContentLoaded', () => {
+        loadStats();
+        loadCacheStatus();
+        loadProgramDetails();
+    });
+
+    async function loadStats() {
+        try {
+            const data = await fetchAPI('/api/admin/stats');
+            document.getElementById('total-users').textContent = data.total_users || 0;
+            document.getElementById('total-playlists').textContent = data.total_playlists || 0;
+            document.getElementById('total-songs').textContent = data.total_songs || 0;
+            document.getElementById('last-run').textContent = data.last_run_at ? formatDateKorean(data.last_run_at) : '미실행';
+        } catch (e) {}
+    }
+
+    async function loadCacheStatus() {
+        try {
+            const data = await fetchAPI('/api/admin/cache-status');
+            const cs = data.cache_status || {};
+            const container = document.getElementById('cache-grid');
+
+            container.innerHTML = PROGRAMS.map(p => {
+                const status = cs[p.prog_code] || {};
+                return `
+                    <div class="cache-card">
+                        <h3 class="cache-program">${p.name}</h3>
+                        <p class="cache-station">${p.station}</p>
+                        <div class="cache-info">
+                            <p>캐시된 곡: <strong>${status.songs_count || 0}</strong></p>
+                            <p>업데이트: ${status.last_update ? formatDateKorean(status.last_update) : '없음'}</p>
+                        </div>
+                        <button class="btn btn-secondary btn-small" onclick="updateCache('${p.prog_code}', this)">업데이트</button>
+                    </div>
+                `;
+            }).join('');
+        } catch (e) {
+            document.getElementById('cache-grid').innerHTML = '<p class="error-message">로드 실패</p>';
+        }
+    }
+
+    async function updateCache(progCode, btn) {
+        btn.disabled = true;
+        btn.textContent = '수집 중...';
+        try {
+            const data = await fetchAPI(`/api/admin/update-cache/${progCode}`, { method: 'POST' });
+            showToast(data.message || '완료', 'success');
+            loadCacheStatus();
+        } catch (e) {} finally {
+            btn.disabled = false;
+            btn.textContent = '업데이트';
+        }
+    }
+
+    async function runJob(url, btnId) {
+        const btn = document.getElementById(btnId);
+        const origText = btn.textContent;
+        btn.disabled = true;
+        btn.textContent = '실행 중...';
+        try {
+            const data = await fetchAPI(url, { method: 'POST' });
+            showToast(data.message || '작업 완료', 'success');
+            loadStats();
+            loadCacheStatus();
+            loadProgramDetails();
+        } catch (e) {} finally {
+            btn.disabled = false;
+            btn.textContent = origText;
+        }
+    }
+
+    async function loadProgramDetails() {
+        try {
+            const data = await fetchAPI('/api/admin/program-details');
+            const details = data.program_details || {};
+            const container = document.getElementById('program-details-grid');
+
+            container.innerHTML = PROGRAMS.map(p => {
+                const d = details[p.prog_code] || {};
+                return `
+                    <div class="program-detail-card">
+                        <h3>${p.name} <small style="color:#999;">${p.station}</small></h3>
+                        <div class="detail-grid">
+                            <div class="detail-item">
+                                <span class="detail-label">구독자</span>
+                                <span class="detail-value">${d.followers || 0}</span>
+                            </div>
+                            <div class="detail-item">
+                                <span class="detail-label">플레이리스트</span>
+                                <span class="detail-value">${d.playlists_count || 0}</span>
+                            </div>
+                            <div class="detail-item">
+                                <span class="detail-label">총 곡</span>
+                                <span class="detail-value">${d.total_songs || 0}</span>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        } catch (e) {
+            document.getElementById('program-details-grid').innerHTML = '<p class="error-message">로드 실패</p>';
+        }
+    }
+</script>
+{% endblock %}

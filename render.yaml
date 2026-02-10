@@ -1,0 +1,37 @@
+services:
+  - type: web
+    name: korean-radio-spotify
+    runtime: python
+    pythonVersion: 3.11
+    plan: free
+    buildCommand: pip install -r requirements.txt && flask db upgrade
+    startCommand: gunicorn wsgi:app
+    envVars:
+      - key: FLASK_ENV
+        value: production
+      - key: FLASK_APP
+        value: wsgi.py
+      - key: SECRET_KEY
+        generateValue: true
+      - key: ENCRYPTION_KEY
+        generateValue: true
+      - key: LOG_LEVEL
+        value: INFO
+      - key: SPOTIFY_CLIENT_ID
+        sync: false
+      - key: SPOTIFY_CLIENT_SECRET
+        sync: false
+      - key: SPOTIFY_REDIRECT_URI
+        sync: false
+      - key: DATABASE_URL
+        database:
+          name: korean_radio_spotify_db
+          engine: postgres
+          version: "15"
+          plan: free
+
+databases:
+  - name: korean_radio_spotify_db
+    engine: postgres
+    version: "15"
+    plan: free

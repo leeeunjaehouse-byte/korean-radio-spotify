@@ -1,0 +1,298 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Spotify client module for managing playlists and searching tracks.
+
+Provides functions for:
+- Searching tracks with 3-tier strategy
+- Managing playlist creation and modification
+- Cleaning artist names
+- Handling user authentication and token refresh
+"""
+
+import re
+import logging
+from datetime import datetime
+
+try:
+    import spotipy
+    from spotipy.oauth2 import SpotifyOAuth
+    SPOTIPY_AVAILABLE = True
+except ImportError:
+    SPOTIPY_AVAILABLE = False
+
+log = logging.getLogger(__name__)
+
+DAY_NAMES = ["월", "화", "수", "목", "금", "토", "일"]
+
+
+def clean_artist_name(artist):
+    """
+    Clean artist name by removing parenthetical info and featured artists.
+
+    Removes:
+    - Content in parentheses: "Artist (Remix)" -> "Artist"
+    - Featured artists: "Artist feat. Other" -> "Artist"
+    - "of" separator: "Artist of Something" -> "Artist"
+
+    Args:
+        artist (str): Artist name to clean
+
+    Returns:
+        str: Cleaned artist name
+    """
+    artist = re.sub(r"\s*\([^)]*\)\s*", " ", artist)
+    artist = re.split(r"\s+feat\.?\s+", artist, flags=re.IGNORECASE)[0]
+    artist = re.split(r"\s+of\s+", artist, flags=re.IGNORECASE)[0]
+    return artist.strip()
+
+
+def search_spotify_track(sp, title, artist):
+    """
+    Search for a track on Spotify using a 3-tier strategy.
+
+    Tier 1: Search with title and cleaned artist name
+    Tier 2: General search with both title and artist
+    Tier 3: Title-only search (fallback)
+
+    Args:
+        sp (spotipy.Spotify): Authenticated Spotify client
+        title (str): Track title
+        artist (str): Artist name
+
+    Returns:
+        str: Spotify track ID if found, None otherwise
+    """
+    cleaned_artist = clean_artist_name(artist) if artist else ""
+
+    # Tier 1: Specific query with title and artist
+    if cleaned_artist:
+        query = f"track:{title} artist:{cleaned_artist}"
+        try:
+            results = sp.search(q=query, type="track", limit=3)
+            tracks = results.get("tracks", {}).get("items", [])
+            if tracks:
+                log.debug(f"Found '{title}' by '{cleaned_artist}' (Tier 1)")
+                return tracks[0]["id"]
+        except Exception as e:
+            log.debug(f"Tier 1 search failed: {e}")
+
+        # Tier 2: General search with both title and artist
+        query = f"{title} {cleaned_artist}"
+        try:
+            results = sp.search(q=query, type="track", limit=3)
+            tracks = results.get("tracks", {}).get("items", [])
+            if tracks:
+                log.debug(f"Found '{title}' by '{cleaned_artist}' (Tier 2)")
+                return tracks[0]["id"]
+        except Exception as e:
+            log.debug(f"Tier 2 search failed: {e}")
+
+    # Tier 3: Title-only search (fallback)
+    try:
+        results = sp.search(q=title, type="track", limit=5)
+        tracks = results.get("tracks", {}).get("items", [])
+        if tracks:
+            log.debug(f"Found '{title}' by title-only search (Tier 3)")
+            return tracks[0]["id"]
+    except Exception as e:
+        log.debug(f"Tier 3 search failed: {e}")
+
+    log.debug(f"Could not find '{title}' by '{artist}' on Spotify")
+    return None
+
+
+def find_playlist(sp, target_name):
+    """
+    Find a playlist by name.
+
+    Args:
+        sp (spotipy.Spotify): Authenticated Spotify client
+        target_name (str): Playlist name to search for
+
+    Returns:
+        str: Playlist ID if found, None otherwise
+    """
+    try:
+        offset = 0
+        while True:
+            playlists = sp.current_user_playlists(limit=50, offset=offset)
+            items = playlists.get("items", [])
+            if not items:
+                break
+
+            for pl in items:
+                if pl["name"] == target_name:
+                    log.debug(f"Found existing playlist: '{target_name}'")
+                    return pl["id"]
+
+            offset += 50
+            if offset >= playlists.get("total", 0):
+                break
+
+        log.debug(f"Playlist not found: '{target_name}'")
+        return None
+    except Exception as e:
+        log.error(f"Error finding playlist '{target_name}': {e}")
+        return None
+
+
+def find_or_create_playlist(sp, playlist_name):
+    """
+    Find an existing playlist or create a new one.
+
+    Args:
+        sp (spotipy.Spotify): Authenticated Spotify client
+        playlist_name (str): Name of the playlist
+
+    Returns:
+        tuple: (playlist_id, is_new) where is_new is True if playlist was created
+    """
+    try:
+        playlist_id = find_playlist(sp, playlist_name)
+        if playlist_id:
+            return playlist_id, False
+
+        user = sp.current_user()
+        new_playlist = sp.user_playlist_create(
+            user=user["id"],
+            name=playlist_name,
+            public=False,
+            description="Auto-generated by Radio Playlist Script",
+        )
+        log.info(f"Created new playlist: '{playlist_name}'")
+        return new_playlist["id"], True
+    except Exception as e:
+        log.error(f"Error managing playlist '{playlist_name}': {e}")
+        raise
+
+
+def get_user_spotify_client(user, client_id, client_secret, redirect_uri, token_cache_path):
+    """
+    Create an authenticated Spotify client for a user.
+
+    Handles token refresh if needed. Uses cached token if available.
+
+    Args:
+        user (User): User object with spotify_token_data dict containing:
+            - 'access_token': Current access token
+            - 'refresh_token': Refresh token for renewal
+            - 'token_expire_at': Unix timestamp of expiration
+        client_id (str): Spotify API client ID
+        client_secret (str): Spotify API client secret
+        redirect_uri (str): OAuth redirect URI
+        token_cache_path (str): Path to cache tokens (optional, can be None)
+
+    Returns:
+        spotipy.Spotify: Authenticated Spotify client
+
+    Raises:
+        ValueError: If user has no stored Spotify token data
+    """
+    if not user.spotify_token_data:
+        raise ValueError("User has no Spotify token data")
+
+    token_data = user.spotify_token_data
+    access_token = token_data.get("access_token")
+
+    if not access_token:
+        raise ValueError("User has no access token")
+
+    # Try to refresh if token is expired or about to expire
+    if _is_token_expired(token_data):
+        log.debug(f"Token expired for user {user.id}, refreshing...")
+        refresh_token = token_data.get("refresh_token")
+        if refresh_token:
+            token_data = refresh_user_token(
+                token_data, client_id, client_secret
+            )
+            user.spotify_token_data = token_data
+            user.save()
+            access_token = token_data.get("access_token")
+
+    return spotipy.Spotify(auth=access_token)
+
+
+def refresh_user_token(token_data, client_id, client_secret):
+    """
+    Refresh an expired Spotify access token using the refresh token.
+
+    Args:
+        token_data (dict): Token data dict with 'refresh_token' key
+        client_id (str): Spotify API client ID
+        client_secret (str): Spotify API client secret
+
+    Returns:
+        dict: Updated token data with new access_token and expiration
+
+    Raises:
+        Exception: If token refresh fails
+    """
+    try:
+        refresh_token = token_data.get("refresh_token")
+        if not refresh_token:
+            raise ValueError("No refresh token available")
+
+        auth = SpotifyOAuth(
+            client_id=client_id,
+            client_secret=client_secret,
+            redirect_uri="http://localhost:8080/callback",
+        )
+
+        new_token = auth.refresh_access_token(refresh_token)
+
+        token_data["access_token"] = new_token["access_token"]
+        token_data["expires_in"] = new_token.get("expires_in", 3600)
+        token_data["token_expire_at"] = (
+            datetime.now().timestamp() + new_token.get("expires_in", 3600)
+        )
+
+        if "refresh_token" in new_token:
+            token_data["refresh_token"] = new_token["refresh_token"]
+
+        log.info("Spotify token refreshed successfully")
+        return token_data
+    except Exception as e:
+        log.error(f"Failed to refresh Spotify token: {e}")
+        raise
+
+
+def _is_token_expired(token_data):
+    """
+    Check if a token is expired or about to expire.
+
+    Considers token expired if it expires within 5 minutes.
+
+    Args:
+        token_data (dict): Token data dict with 'token_expire_at' key
+
+    Returns:
+        bool: True if token is expired or expiring soon, False otherwise
+    """
+    expire_at = token_data.get("token_expire_at")
+    if not expire_at:
+        return True
+
+    current_time = datetime.now().timestamp()
+    return expire_at - current_time < 300
+
+
+def get_playlist_name(program, now=None):
+    """
+    Generate a playlist name from program info and date.
+
+    Format: "{program_name} {date}({day_name})"
+    Example: "이상순 2024.0210(월)"
+
+    Args:
+        program (dict): Program dict with 'name' key
+        now (datetime, optional): Datetime object. Defaults to current time.
+
+    Returns:
+        str: Formatted playlist name
+    """
+    if now is None:
+        now = datetime.now()
+
+    day_name = DAY_NAMES[now.weekday()]
+    return f"{program['name']} {now.strftime('%Y.%m%d')}({day_name})"

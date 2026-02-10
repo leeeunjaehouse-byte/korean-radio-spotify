@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="한국 라디오 선곡표를 Spotify 플레이리스트로 변환하는 웹 애플리케이션">
+    <title>{% block title %}라디오 플리{% endblock %}</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <!-- Navigation Bar -->
+    <nav class="navbar">
+        <div class="navbar-container">
+            <div class="navbar-left">
+                <a href="/" class="navbar-logo">🎵 라디오 플리</a>
+            </div>
+            <div class="navbar-right">
+                {% if session.get('user_id') and user %}
+                    <a href="/dashboard" class="navbar-link">대시보드</a>
+                    <a href="/admin" class="navbar-link">관리</a>
+                    <span class="navbar-user">{{ user.display_name }}</span>
+                    <a href="/auth/logout" class="navbar-logout">로그아웃</a>
+                {% else %}
+                    <a href="/auth/spotify" class="navbar-login">Spotify로 로그인</a>
+                {% endif %}
+            </div>
+        </div>
+    </nav>
+
+    <!-- Main Content -->
+    <main class="main-content">
+        {% block content %}{% endblock %}
+    </main>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <div class="footer-content">
+            <p>&copy; 2025 라디오 플리. All rights reserved.</p>
+            <p>한국 라디오 애호가들을 위한 Spotify 플레이리스트 자동 생성 서비스</p>
+        </div>
+    </footer>
+
+    <!-- Toast Notification Container -->
+    <div id="toast-container" class="toast-container"></div>
+
+    <!-- JavaScript Utilities -->
+    <script>
+        function showToast(message, type = 'info') {
+            const container = document.getElementById('toast-container');
+            const toast = document.createElement('div');
+            toast.className = `toast toast-${type}`;
+            toast.innerHTML = `
+                <div class="toast-content">
+                    <span class="toast-icon">${type === 'success' ? '✓' : type === 'error' ? '✕' : 'ℹ'}</span>
+                    <span class="toast-message">${message}</span>
+                </div>
+                <button class="toast-close" onclick="this.parentElement.remove()">×</button>
+            `;
+            container.appendChild(toast);
+            setTimeout(() => { if (toast.parentElement) toast.remove(); }, 4000);
+        }
+
+        async function fetchAPI(url, options = {}) {
+            try {
+                const response = await fetch(url, {
+                    headers: { 'Content-Type': 'application/json', ...options.headers },
+                    ...options
+                });
+                if (!response.ok) {
+                    const errorData = await response.json().catch(() => ({}));
+                    throw new Error(errorData.error || `HTTP ${response.status}`);
+                }
+                return await response.json();
+            } catch (error) {
+                showToast(error.message || '오류가 발생했습니다.', 'error');
+                throw error;
+            }
+        }
+
+        function formatDateKorean(dateString) {
+            const date = new Date(dateString);
+            const year = date.getFullYear();
+            const month = String(date.getMonth() + 1).padStart(2, '0');
+            const day = String(date.getDate()).padStart(2, '0');
+            return `${year}년 ${month}월 ${day}일`;
+        }
+    </script>
+
+    {% block scripts %}{% endblock %}
+</body>
+</html>
