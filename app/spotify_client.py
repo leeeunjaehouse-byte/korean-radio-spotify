@@ -45,18 +45,23 @@ def clean_artist_name(artist):
     Returns:
         str: Cleaned artist name
     """
-    # Remove instrument/role prefix at start
+    # Remove instrument/role prefix at start (including compound prefixes)
     artist = re.sub(
-        r"^(pf|vn|vc|gt|bar|sop|ten|bass|fl|ob|cl|hrn|perc|org|hp|voc|"
+        r"^(pf|vn|vc|gt|bar|sop|ten|bass|fl|ob|cl|hrn|perc|org|hp|"
+        r"voc&e-vn|e-vn|voc|"
         r"trombone|trumpet|tuba|cello|violin|piano|soprano|"
         r"baroque harp|viola da gamba|nyckelharpa|accordion|"
-        r"지휘|pf&지휘):\s*",
+        r"pf&지휘|지휘):\s*",
         "",
         artist,
         flags=re.IGNORECASE,
     )
     # Remove secondary performers with instrument prefix after comma
-    artist = re.split(r",\s*(?:pf|vn|vc|trombone|piano|gt):", artist)[0].strip()
+    artist = re.split(r",\s*(?:pf|vn|vc|trombone|piano|gt|지휘):", artist)[0].strip()
+    # Remove orchestra/ensemble name after comma (if remainder contains Korean)
+    comma_parts = artist.split(",", 1)
+    if len(comma_parts) > 1 and re.search(r"[가-힣]", comma_parts[1]) and re.search(r"[A-Za-z]", comma_parts[0]):
+        artist = comma_parts[0].strip()
     artist = re.sub(r"\s*\([^)]*\)\s*", " ", artist)
     artist = re.split(r"\s+feat\.?\s+", artist, flags=re.IGNORECASE)[0]
     artist = re.split(r"\s+of\s+", artist, flags=re.IGNORECASE)[0]
@@ -86,15 +91,25 @@ def clean_title(title):
 
     # 2. Remove "+" continuation (multi-song entries)
     title = re.split(r"\s*\+\s+", title)[0].strip()
+    # Also split on "& X번" (multi-movement classical entries)
+    title = re.split(r"\s*&\s+\d+번", title)[0].strip()
 
-    # 3. Handle "Composer / Title" format (e.g., "Kreisler / 비엔나풍의 작은 행진곡")
+    # 3. Handle "영화 <Name> OST - Title" pattern
+    ost_match = re.match(r"영화\s*[<《].*?[>》]\s*OST\s*[-–:]\s*(.+)", title)
+    if ost_match:
+        title = ost_match.group(1).strip()
+
+    # 4. Handle "Composer / Title" format (e.g., "Kreisler / 비엔나풍의 작은 행진곡")
     composer = None
-    composer_match = re.match(r"^([A-Za-z][A-Za-z.\s]+?)\s*/\s+(.+)$", title)
+    composer_match = re.match(r"^([A-Za-z][A-Za-z.\s]+?)\s*/\s*(.+)$", title)
     if composer_match:
         composer = composer_match.group(1).strip()
         title = composer_match.group(2).strip()
 
-    # 4. Handle title with Korean + Western in parentheses
+    # 5. Remove Korean movement markers: "중 2악장" -> ""
+    title = re.sub(r"\s*중\s+\d+악장\s*", " ", title)
+
+    # 6. Handle title with Korean + Western in parentheses
     #    e.g., "비엔나풍의 작은 행진곡 (Marche Miniature Viennoise)"
     #    -> prefer "Marche Miniature Viennoise"
     has_korean = bool(re.search(r"[가-힣]", title))
@@ -106,16 +121,21 @@ def clean_title(title):
             title = western_match.group(1).strip()
             has_korean = False
 
-    # 5. Remove Korean-only parenthetical translations
+    # 7. Remove Korean-only parenthetical translations
     #    e.g., "(연애 소설의 결말)", "(회상)", "(보링까노의 애가)"
     title = re.sub(r"\([가-힣\s,·]+\)", "", title)
 
-    # 6. Also remove Chinese-only parenthetical translations
-    #    but keep mixed ones like "(在春天消失之前)" which are actual titles
-    # Not removing Chinese since some song titles are in Chinese
+    # 8. For mixed Korean/Western titles, extract Western parts + catalog numbers
+    has_korean = bool(re.search(r"[가-힣]", title))
+    if has_korean and re.search(r"[A-Za-z]", title):
+        # Remove Korean number markers (X번)
+        title = re.sub(r"\d+번", "", title)
+        # Remove Korean character sequences
+        title = re.sub(r"[가-힣]+", " ", title)
 
-    # 7. Clean up extra whitespace
+    # 9. Clean up extra whitespace and stray punctuation
     title = re.sub(r"\s+", " ", title).strip()
+    title = re.sub(r"^[\s,&]+|[\s,&]+$", "", title)
 
     return title, composer
 

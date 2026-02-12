@@ -203,9 +203,17 @@ def _parse_kbs_board_songs(lines):
     """
     Parse song list from KBS board text lines.
 
-    Handles both inline and separated formats:
-    - Inline: "1. Song Title pf: Artist Name"
-    - Separated: "1. Song Title" / "pf: Artist Name"
+    Uses a block-based approach:
+    1. Find all numbered entries and their positions
+    2. For each entry, collect lines until the next entry
+    3. Find the duration line, work backwards to find the artist
+    4. Everything between the title line and artist is title continuation
+
+    This handles multi-line classical music titles like:
+      5. [3576/신청곡] J.S.Bach / 무반주 바이올린 소나타
+      1번 g minor, BWV.1001 중 3악장 Siciliana
+      vn: 정경화
+      3'14 / 3'29
 
     Args:
         lines (list): List of text lines
@@ -217,83 +225,109 @@ def _parse_kbs_board_songs(lines):
     dur_re = re.compile(r"\d+'\d+")
     num_re = re.compile(r"^(\d+)\.\s*(.+)")
     inst_re = re.compile(
-        r"(pf|vn|vc|gt|bar|sop|ten|bass|fl|ob|cl|hrn|perc|org|hp|"
-        r"voc|trombone|trumpet|tuba|cello|violin|piano|soprano|"
-        r"baroque harp|viola da gamba|nyckelharpa|accordion):\s*",
+        r"^(pf|vn|vc|gt|bar|sop|ten|bass|fl|ob|cl|hrn|perc|org|hp|"
+        r"voc&e-vn|e-vn|voc|trombone|trumpet|tuba|cello|violin|piano|soprano|"
+        r"baroque harp|viola da gamba|nyckelharpa|accordion|"
+        r"pf&지휘|지휘):\s*",
         re.IGNORECASE,
     )
     skip_words = ["뮤직 인사이드", "세상의 모든 음악 Logo", "저녁에 쉼표"]
 
-    i = 0
-    while i < len(lines):
-        line = lines[i]
-
-        # Skip section headers
+    # Step 1: Find all numbered entries and their positions
+    entry_indices = []
+    for idx, line in enumerate(lines):
         if any(h in line for h in skip_words) and not num_re.match(line):
-            i += 1
             continue
-
-        # Skip time-only lines
-        if dur_re.fullmatch(line):
-            i += 1
-            continue
-
         num_m = num_re.match(line)
-        if not num_m:
-            i += 1
-            continue
+        if num_m:
+            entry_indices.append((idx, num_m.group(2).strip()))
 
-        title = num_m.group(2).strip()
-        artist = ""
+    # Step 2: Process each entry's block
+    for e_idx, (start_idx, first_title) in enumerate(entry_indices):
+        # Determine end of this entry's block
+        if e_idx + 1 < len(entry_indices):
+            end_idx = entry_indices[e_idx + 1][0]
+        else:
+            end_idx = len(lines)
 
-        # Case 1: Duration included in title line (inline format)
-        if dur_re.search(title):
-            inst_m = inst_re.search(title)
+        # Collect inner lines (between numbered line and next entry)
+        block = []
+        for bi in range(start_idx + 1, end_idx):
+            bl = lines[bi].strip()
+            if not bl:
+                continue
+            if any(h in bl for h in skip_words):
+                continue
+            block.append(bl)
+
+        # --- Case 1: Duration in the title line (inline format) ---
+        if dur_re.search(first_title):
+            inst_m = inst_re.search(first_title)
             if inst_m:
-                song_title = title[: inst_m.start()].strip()
-                rest = title[inst_m.end() :]
+                song_title = first_title[: inst_m.start()].strip()
+                rest = first_title[inst_m.end():]
                 artist = dur_re.sub("", rest).strip()
                 artist = re.split(r",\s*지휘:", artist)[0].strip().rstrip(",")
             else:
-                song_title = dur_re.sub("", title).strip()
+                song_title = dur_re.sub("", first_title).strip()
                 artist = ""
-
             if song_title:
                 songs.append({"title": song_title, "artist": artist})
-            i += 1
             continue
 
-        # Case 2: Separated format - next line is artist
-        if i + 1 < len(lines):
-            nxt = lines[i + 1]
+        # --- Case 2: Separated format - use block to find artist ---
+        title_parts = [first_title]
+        artist = ""
 
-            # Skip "+" continuation lines (multi-song entries)
-            j = i + 1
-            while j < len(lines) and lines[j].strip().startswith("+"):
-                j += 1
-            if j > i + 1:
-                nxt = lines[j] if j < len(lines) else ""
+        if not block:
+            songs.append({"title": first_title, "artist": ""})
+            continue
 
-            if nxt and not num_re.match(nxt) and not any(h in nxt for h in skip_words):
-                if dur_re.fullmatch(nxt):
-                    i = j + 1
+        # Find the LAST pure duration line in the block
+        dur_line_idx = None
+        for bi in range(len(block) - 1, -1, -1):
+            bl = block[bi]
+            clean = dur_re.sub("", bl).replace("/", "").replace(" ", "").strip()
+            if dur_re.search(bl) and not clean:
+                dur_line_idx = bi
+                break
+
+        if dur_line_idx is not None and dur_line_idx > 0:
+            # Find artist line: last significant line before duration
+            # Skip note lines (starting with *)
+            artist_idx = dur_line_idx - 1
+            while artist_idx >= 0 and block[artist_idx].startswith("*"):
+                artist_idx -= 1
+
+            if artist_idx >= 0:
+                artist_line = block[artist_idx]
+                # Lines before artist_idx are title continuation
+                for ti in range(0, artist_idx):
+                    if not block[ti].startswith("+"):
+                        title_parts.append(block[ti])
+
+                # Extract artist from artist line
+                inst_m = inst_re.match(artist_line)
+                if inst_m:
+                    artist = artist_line[inst_m.end():].strip()
                 else:
-                    inst_m = inst_re.match(nxt)
-                    if inst_m:
-                        artist = nxt[inst_m.end() :].strip()
-                    else:
-                        artist = nxt.strip()
-                    artist = re.split(r",\s*지휘:", artist)[0].strip().rstrip(",")
-
-                    if j + 1 < len(lines) and dur_re.fullmatch(lines[j + 1].strip()):
-                        i = j + 2
-                    else:
-                        i = j + 1
-            else:
-                i = j if j > i + 1 else i + 1
+                    artist = artist_line.strip()
+                # Remove secondary 지휘: info after comma
+                artist = re.split(r",\s*지휘:", artist)[0].strip().rstrip(",")
+        elif dur_line_idx == 0:
+            # Duration is first line in block, no artist found
+            pass
         else:
-            i += 1
+            # No duration line found; use first non-skip block line as artist
+            artist_line = block[0]
+            inst_m = inst_re.match(artist_line)
+            if inst_m:
+                artist = artist_line[inst_m.end():].strip()
+            else:
+                artist = artist_line.strip()
+            artist = re.split(r",\s*지휘:", artist)[0].strip().rstrip(",")
 
+        title = " ".join(title_parts)
         if title:
             songs.append({"title": title, "artist": artist})
 
